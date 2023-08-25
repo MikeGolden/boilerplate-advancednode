@@ -20,102 +20,61 @@ const store = new MongoStore({ url: URI });
 
 const app = express();
 
-function onAuthorizeSuccess(data, accept) {
-  console.log('successful connection to socket.io');
-
-  accept(null, true);
-}
-
-function onAuthorizeFail(data, message, error, accept) {
-  if (error) throw new Error(message);
-  console.log('failed connection to socket.io:', message);
-  accept(null, false);
-}
-
-const http = require('http').createServer(app);
-const io = require('socket.io')(http);
-io.use(
-  passportSocketIo.authorize({
-    cookieParser: cookieParser,
-    key: 'express.sid',
-    secret: process.env.SESSION_SECRET,
-    store: store,
-    success: onAuthorizeSuccess,
-    fail: onAuthorizeFail
-  })
-  );
-
-
 app.set('view engine', 'pug');
 app.set('views', './views/pug');
 
-// First: set up the express app to use the session by defining the following options
-app.use(session({ 
-  key: 'express.sid',
+app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: true,
   saveUninitialized: true,
-  store: store,
-  cookie: { 
-    secure: false,
-    httpOnly: true,
-    maxAge: 60 * 60 * 1000 // 1 hour
-   }
- }));
+  cookie: { secure: false }
+}));
 
-// Then: set up the middleware passport.initialize(), and then passport.session(), in this order
 app.use(passport.initialize());
 app.use(passport.session());
 
-fccTesting(app); //For FCC testing purposes
+fccTesting(app); // For fCC testing purposes
 app.use('/public', express.static(process.cwd() + '/public'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 myDB(async client => {
-  const myDataBase = await client.db().collection('users');
-  const { databaseName } = client.db();
+  const myDataBase = await client.db('database').collection('users');
 
-  console.log(`Connected to Database - ${databaseName}. Please log in`);
-
-  let currentUsers = 0;
-  io.on('connection', socket => {
-    console.log(`User ${socket.request.user.username} has connected`);
-    ++currentUsers;
-    io.emit('user', {
-      username: socket.request.user.username,
-      currentUsers,
-      connected: true
-    });
-
-    socket.on('chat message', message => {
-      io.emit('chat message', {
-        username: socket.request.user.username,
-        message
-      });
-    });
-
-    socket.on('disconnect', () => {
-      console.log(`User ${socket.request.user.username} has disconnected`);
-      --currentUsers;
-      io.emit('user', {
-        username: socket.request.user.username,
-        currentUsers,
-        connected: false
-      });
+  app.route('/').get((req, res) => {
+    res.render('index', {
+      title: 'Connected to Database',
+      message: 'Please log in'
     });
   });
 
-  auth(app, myDataBase);
-  routes(app, myDataBase);
+  passport.use(new LocalStrategy((username, password, done) => {
+    myDataBase.findOne({ username: username }, (err, user) => {
+      console.log(`User ${username} attempted to log in.`);
+      if (err) { return done(err); }
+      if (!user) { return done(null, false); }
+      if (password !== user.password) { return done(null, false); }
+      return done(null, user);
+    });
+  }));
 
-}).catch(error => {
+  passport.serializeUser((user, done) => {
+    done(null, user._id);
+  });
+  
+  passport.deserializeUser((id, done) => {
+    myDataBase.findOne({ _id: new ObjectID(id) }, (err, doc) => {
+      done(null, doc);
+    });
+  });
+
+}).catch(e => {
   app.route('/').get((req, res) => {
     res.render('index', { title: e, message: 'Unable to connect to database' });
   });
 });
-
+  
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-  console.log('Listening on port ' + PORT);
+app.listen(PORT, () => {
+  console.log(`Listening on port ${PORT}`);
 });
